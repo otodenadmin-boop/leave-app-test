@@ -1,1 +1,141 @@
-<!doctype html><meta charset="utf-8"><title>test</title><p>仮のページ</p>
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>有給申請テスト</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; line-height: 1.7; background: #f6f7f8; color: #222; }
+  h1 { font-size: 1.1rem; margin: 0 0 12px; }
+  .card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .name { font-size: 1.4rem; font-weight: 700; }
+  .ok { color: #0a7a3d; font-weight: 700; }
+  .ng { color: #c0392b; font-weight: 700; }
+  .muted { color: #777; font-size: .85rem; }
+  ol { padding-left: 1.2em; margin: 0; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #f0f1f3; padding: 8px; border-radius: 6px; font-size: .8rem; }
+</style>
+<!-- WOFFの部品（SDK）。公式ドキュメント記載のURL -->
+<script charset="utf-8" src="https://static.worksmobile.net/static/wm/woff/edge/3.7.4/sdk.js"></script>
+</head>
+<body>
+<h1>有給申請テスト</h1>
+
+<div class="card">
+  <div class="muted">(a) この画面を開いた人</div>
+  <div class="name" id="who">確認中…</div>
+</div>
+
+<div class="card">
+  <div class="muted">(b)(c) サーバー側（GAS）での本人確認</div>
+  <div id="server">まだ実行していません</div>
+</div>
+
+<div class="card">
+  <div class="muted">進み具合</div>
+  <ol id="log"></ol>
+</div>
+
+<p class="muted">版: 1</p>
+
+<script>
+// ===== 設定（ここだけ書き換える） =====
+const WOFF_ID = 'p4tHnIeJWfEQ663pDApM4g';
+const GAS_URL = '';      // 区切り6でGASのURL（最後が /exec）を入れる
+const WOFF_SCOPE = '';   // 区切り7で 'user.read' を入れて試す。最初は空のまま
+// =====================================
+
+const $ = function (id) { return document.getElementById(id); };
+
+// 進み具合を画面に1行ずつ出す（スマホでは開発者ツールが使えないため）
+function log(text) {
+  const li = document.createElement('li');
+  li.textContent = text;
+  $('log').appendChild(li);
+}
+
+async function main() {
+  // 1. WOFFの初期化
+  log('WOFFを初期化します');
+  const config = { woffId: WOFF_ID };
+  if (WOFF_SCOPE) config.scope = WOFF_SCOPE;
+  await woff.init(config);
+  log('初期化できました（LINE WORKSの中で開いている: ' + woff.isInClient() + '）');
+
+  // 2. PCのブラウザなどで開いた場合は、ログインが必要
+  if (!woff.isInClient() && !woff.isLoggedIn()) {
+    log('ログイン画面に移ります');
+    const loginConfig = {};
+    if (WOFF_SCOPE) loginConfig.scope = WOFF_SCOPE;
+    woff.login(loginConfig);
+    return; // ログイン後、このページが開き直される
+  }
+
+  // 3. 開いた人の名前を取る
+  const profile = await woff.getProfile();
+  $('who').textContent = profile.displayName + ' さん';
+  log('名前を取得できました');
+
+  // 4. GASのURLが未設定なら、ここまで
+  if (!GAS_URL) {
+    $('server').textContent = 'GASのURLが未設定です（区切り6で設定します）';
+    return;
+  }
+
+  // 5. 通行証を取り、GASに送って確かめてもらう
+  const token = woff.getAccessToken();
+  if (!token) throw new Error('通行証を取得できませんでした');
+  log('通行証を取得できました（' + token.length + '文字）。GASに送ります');
+
+  // Content-Typeをtext/plainにする（ブラウザの事前確認を避ける定石）
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'whoami',
+      accessToken: token,
+      claimedUserId: profile.userId
+    })
+  });
+  log('GASから応答がありました（HTTP ' + res.status + '）');
+
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error('GASの応答がJSONではありません（先頭: ' + text.slice(0, 80) + '）');
+  }
+  showServerResult(data);
+}
+
+// GASの結果を表示する
+function showServerResult(data) {
+  const box = $('server');
+  box.textContent = '';
+  const head = document.createElement('div');
+  if (data.ok) {
+    head.className = 'ok';
+    head.textContent = '本人を確認できました: ' + (data.name || '（名前なし）') + ' さん';
+    box.appendChild(head);
+    const detail = document.createElement('div');
+    detail.textContent = '使った方法: ' + data.method + ' ／ 画面側のIDと一致: ' + (data.match ? 'はい' : 'いいえ');
+    box.appendChild(detail);
+  } else {
+    head.className = 'ng';
+    head.textContent = '本人を確認できませんでした';
+    box.appendChild(head);
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(data, null, 2);
+    box.appendChild(pre);
+  }
+}
+
+main().catch(function (err) {
+  log('エラー: ' + (err && (err.code || '')) + ' ' + (err && err.message ? err.message : err));
+  if ($('who').textContent === '確認中…') $('who').textContent = '取得できませんでした';
+});
+</script>
+</body>
+</html>
