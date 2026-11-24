@@ -37,13 +37,13 @@
   <ol id="log"></ol>
 </div>
 
-<p class="muted">版: 2</p>
+<p class="muted">版: 3</p>
 
 <script>
 // ===== 設定（ここだけ書き換える） =====
 const WOFF_ID = 'p4tHnIeJWfEQ663pDApM4g';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzh6s9cE4YqZKc239fBw41XvB-cdAl7FCH89dqMSb3dNf-HOh75n24YIbpHjoj4V3J9mA/exec';      // 区切り6でGASのURL（最後が /exec）を入れる
-const WOFF_SCOPE = '';   // 区切り7で 'user.read' を入れて試す。最初は空のまま
+const WOFF_SCOPE = 'user.read';   // 区切り7で 'user.read' を入れて試す。最初は空のまま
 // =====================================
 
 const $ = function (id) { return document.getElementById(id); };
