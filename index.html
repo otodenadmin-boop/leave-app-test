@@ -9,27 +9,44 @@
   body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; line-height: 1.7; background: #f6f7f8; color: #222; }
   h1 { font-size: 1.1rem; margin: 0 0 12px; }
   .card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .name { font-size: 1.4rem; font-weight: 700; }
+  .name { font-size: 1.2rem; font-weight: 700; }
+  label { display: block; font-weight: 700; margin-top: 10px; }
+  input[type=date], textarea { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 10px; border: 1px solid #bbb; border-radius: 8px; background: #fff; }
+  textarea { min-height: 4.5em; }
+  button { width: 100%; margin-top: 14px; padding: 12px; font-size: 1rem; font-weight: 700; color: #fff; background: #1a6fb5; border: 0; border-radius: 8px; }
+  button:disabled { background: #9bb3c7; }
   .ok { color: #0a7a3d; font-weight: 700; }
   .ng { color: #c0392b; font-weight: 700; }
   .muted { color: #777; font-size: .85rem; }
   ol { padding-left: 1.2em; margin: 0; }
-  pre { white-space: pre-wrap; word-break: break-all; background: #f0f1f3; padding: 8px; border-radius: 6px; font-size: .8rem; }
 </style>
 <!-- WOFFの部品（SDK）。公式ドキュメント記載のURL -->
 <script charset="utf-8" src="https://static.worksmobile.net/static/wm/woff/edge/3.7.4/sdk.js"></script>
 </head>
 <body>
-<h1>有給申請テスト</h1>
+<h1>有給休暇の申請（テスト）</h1>
 
 <div class="card">
-  <div class="muted">(a) この画面を開いた人</div>
+  <div class="muted">申請する人</div>
   <div class="name" id="who">確認中…</div>
 </div>
 
+<form class="card" id="form">
+  <label for="date">取得日</label>
+  <input type="date" id="date" required>
+
+  <label>日数</label>
+  <div>1日</div>
+
+  <label for="reason">理由（任意）</label>
+  <textarea id="reason" maxlength="200" placeholder="書かなくても申請できます"></textarea>
+
+  <button type="submit" id="send" disabled>申請する</button>
+</form>
+
 <div class="card">
-  <div class="muted">(b)(c) サーバー側（GAS）での本人確認</div>
-  <div id="server">まだ実行していません</div>
+  <div class="muted">結果</div>
+  <div id="result">まだ送っていません</div>
 </div>
 
 <div class="card">
@@ -37,100 +54,104 @@
   <ol id="log"></ol>
 </div>
 
-<p class="muted">版: 3</p>
+<p class="muted">版: 4</p>
 
 <script>
 // ===== 設定（ここだけ書き換える） =====
 const WOFF_ID = 'p4tHnIeJWfEQ663pDApM4g';
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbzh6s9cE4YqZKc239fBw41XvB-cdAl7FCH89dqMSb3dNf-HOh75n24YIbpHjoj4V3J9mA/exec';      // 区切り6でGASのURL（最後が /exec）を入れる
-const WOFF_SCOPE = 'user.read';   // 区切り7で 'user.read' を入れて試す。最初は空のまま
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzh6s9cE4YqZKc239fBw41XvB-cdAl7FCH89dqMSb3dNf-HOh75n24YIbpHjoj4V3J9mA/exec';
+const WOFF_SCOPE = 'user.read'; // 通行証の範囲を、社員名簿の読み取りだけに絞る
 // =====================================
 
 const $ = function (id) { return document.getElementById(id); };
 
-// 進み具合を画面に1行ずつ出す（スマホでは開発者ツールが使えないため）
 function log(text) {
   const li = document.createElement('li');
   li.textContent = text;
   $('log').appendChild(li);
 }
 
+// 今日の日付（端末の時刻で YYYY-MM-DD）。過去の日付を選べないようにする
+function todayString() {
+  const d = new Date();
+  const p = function (n) { return ('0' + n).slice(-2); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+function showResult(ok, text) {
+  const box = $('result');
+  box.textContent = text;
+  box.className = ok ? 'ok' : 'ng';
+}
+
 async function main() {
+  $('date').min = todayString();
+
   // 1. WOFFの初期化
   log('WOFFを初期化します');
-  const config = { woffId: WOFF_ID };
-  if (WOFF_SCOPE) config.scope = WOFF_SCOPE;
-  await woff.init(config);
-  log('初期化できました（LINE WORKSの中で開いている: ' + woff.isInClient() + '）');
+  await woff.init({ woffId: WOFF_ID, scope: WOFF_SCOPE });
 
   // 2. PCのブラウザなどで開いた場合は、ログインが必要
   if (!woff.isInClient() && !woff.isLoggedIn()) {
     log('ログイン画面に移ります');
-    const loginConfig = {};
-    if (WOFF_SCOPE) loginConfig.scope = WOFF_SCOPE;
-    woff.login(loginConfig);
-    return; // ログイン後、このページが開き直される
-  }
-
-  // 3. 開いた人の名前を取る
-  const profile = await woff.getProfile();
-  $('who').textContent = profile.displayName + ' さん';
-  log('名前を取得できました');
-
-  // 4. GASのURLが未設定なら、ここまで
-  if (!GAS_URL) {
-    $('server').textContent = 'GASのURLが未設定です（区切り6で設定します）';
+    woff.login({ scope: WOFF_SCOPE });
     return;
   }
 
-  // 5. 通行証を取り、GASに送って確かめてもらう
-  const token = woff.getAccessToken();
-  if (!token) throw new Error('通行証を取得できませんでした');
-  log('通行証を取得できました（' + token.length + '文字）。GASに送ります');
+  // 3. 開いた人の名前を出す（表示用。本人の確定はGAS側で行う）
+  const profile = await woff.getProfile();
+  $('who').textContent = profile.displayName + ' さん';
+  log('準備ができました');
+  $('send').disabled = false;
+}
 
-  // Content-Typeをtext/plainにする（ブラウザの事前確認を避ける定石）
-  const res = await fetch(GAS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'whoami',
-      accessToken: token,
-      claimedUserId: profile.userId
-    })
-  });
-  log('GASから応答がありました（HTTP ' + res.status + '）');
+// 申請を送る
+async function submitLeave(ev) {
+  ev.preventDefault();
+  const button = $('send');
+  button.disabled = true; // 二重に送らないよう、押したら止める
+  showResult(true, '送信中…');
 
-  const text = await res.text();
-  let data;
   try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error('GASの応答がJSONではありません（先頭: ' + text.slice(0, 80) + '）');
+    const token = woff.getAccessToken();
+    if (!token) throw new Error('通行証を取得できませんでした。画面を開き直してください');
+
+    // Content-Typeをtext/plainにする（ブラウザの事前確認を避ける定石）
+    const res = await fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'submitLeave',
+        accessToken: token,
+        date: $('date').value,
+        days: 1,
+        reason: $('reason').value
+      })
+    });
+
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error('GASの応答がJSONではありません（先頭: ' + text.slice(0, 80) + '）');
+    }
+
+    if (data.ok) {
+      showResult(true, '受け付けました。申請番号 ' + data.requestId + ' ／ ' + data.date + ' ／ ' + data.days + '日 ／ 状態: ' + data.state);
+      log('記録されました（表の上の名前: ' + data.name + '）');
+      $('reason').value = '';
+    } else {
+      showResult(false, '受け付けられませんでした: ' + data.error);
+    }
+  } catch (err) {
+    showResult(false, 'エラー: ' + (err && err.message ? err.message : err));
+  } finally {
+    button.disabled = false;
   }
-  showServerResult(data);
 }
 
-// GASの結果を表示する
-function showServerResult(data) {
-  const box = $('server');
-  box.textContent = '';
-  const head = document.createElement('div');
-  if (data.ok) {
-    head.className = 'ok';
-    head.textContent = '本人を確認できました: ' + (data.name || '（名前なし）') + ' さん';
-    box.appendChild(head);
-    const detail = document.createElement('div');
-    detail.textContent = '使った方法: ' + data.method + ' ／ 画面側のIDと一致: ' + (data.match ? 'はい' : 'いいえ');
-    box.appendChild(detail);
-  } else {
-    head.className = 'ng';
-    head.textContent = '本人を確認できませんでした';
-    box.appendChild(head);
-    const pre = document.createElement('pre');
-    pre.textContent = JSON.stringify(data, null, 2);
-    box.appendChild(pre);
-  }
-}
+$('form').addEventListener('submit', submitLeave);
 
 main().catch(function (err) {
   log('エラー: ' + (err && (err.code || '')) + ' ' + (err && err.message ? err.message : err));
