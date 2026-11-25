@@ -10,6 +10,7 @@
   h1 { font-size: 1.1rem; margin: 0 0 12px; }
   h2 { font-size: .95rem; margin: 0 0 6px; }
   .card { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card.todo { border: 2px solid #e0a100; }
   .name { font-size: 1.2rem; font-weight: 700; }
   .big { font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
   .big small { font-size: 1rem; font-weight: 400; }
@@ -20,13 +21,20 @@
   label { display: block; font-weight: 700; margin-top: 10px; }
   input[type=date], textarea { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 10px; border: 1px solid #bbb; border-radius: 8px; background: #fff; }
   textarea { min-height: 4.5em; }
-  button { width: 100%; margin-top: 14px; padding: 12px; font-size: 1rem; font-weight: 700; color: #fff; background: #1a6fb5; border: 0; border-radius: 8px; }
-  button:disabled { background: #9bb3c7; }
+  button { width: 100%; margin-top: 10px; padding: 12px; font-size: 1rem; font-weight: 700; color: #fff; background: #1a6fb5; border: 0; border-radius: 8px; }
+  button.sub { background: #fff; color: #1a6fb5; border: 2px solid #1a6fb5; }
+  button.small { width: auto; padding: 6px 12px; font-size: .85rem; }
+  button:disabled { opacity: .5; }
+  .item { border-top: 1px solid #e3e5e8; padding: 10px 0; }
+  .item:first-of-type { border-top: 0; }
   .ok { color: #0a7a3d; font-weight: 700; }
   .ng { color: #c0392b; font-weight: 700; }
   .muted { color: #777; font-size: .85rem; }
   .tag { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: .8rem; background: #e8eef4; }
   .tag.cancel { background: #eee; color: #888; }
+  .tag.done { background: #dff3e6; color: #0a7a3d; }
+  .tag.consult { background: #fdeccd; color: #8a5a00; }
+  .hidden { display: none; }
   ol { padding-left: 1.2em; margin: 0; }
 </style>
 <!-- WOFFの部品（SDK）。公式ドキュメント記載のURL -->
@@ -36,8 +44,16 @@
 <h1>有給休暇の申請（テスト）</h1>
 
 <div class="card">
-  <div class="muted">申請する人</div>
+  <div class="muted">この画面を開いた人</div>
   <div class="name" id="who">確認中…</div>
+  <div class="muted" id="whoSheet"></div>
+</div>
+
+<!-- 確認者にだけ出る。自分が確認する番の申請 -->
+<div class="card todo hidden" id="pendingCard">
+  <h2>確認待ち（<span id="pendingCount">0</span>件）</h2>
+  <div id="pending"></div>
+  <div id="confirmResult"></div>
 </div>
 
 <div class="card">
@@ -50,7 +66,7 @@
     </thead>
     <tbody id="lots"></tbody>
   </table>
-  <div class="muted">確認中の申請も、使った分として数えています。古い付与から先に使います。</div>
+  <div class="muted">確認中・相談中の申請も、使った分として数えています。古い付与から先に使います。</div>
   <div class="ng" id="warn"></div>
 </div>
 
@@ -89,7 +105,13 @@
   <ol id="log"></ol>
 </div>
 
-<p class="muted">版: 5</p>
+<div class="card">
+  <div class="muted">試験用（手順書で指示があったときだけ押します）</div>
+  <button type="button" class="sub small" id="scopeBtn" disabled>通行証の範囲を確かめる</button>
+  <div id="scopeResult" class="muted"></div>
+</div>
+
+<p class="muted">版: 6</p>
 
 <script>
 // ===== 設定（ここだけ書き換える） =====
@@ -106,6 +128,14 @@ function log(text) {
   $('log').appendChild(li);
 }
 
+// 要素を作る小さな部品（文字はすべて textContent で入れる）
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+
 // 今日の日付（端末の時刻で YYYY-MM-DD）。過去の日付を選べないようにする
 function todayString() {
   const d = new Date();
@@ -113,13 +143,13 @@ function todayString() {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
-function showResult(ok, text) {
-  const box = $('result');
+function showResult(id, ok, text) {
+  const box = $(id);
   box.textContent = text;
   box.className = ok ? 'ok' : 'ng';
 }
 
-// 表の1行を作る（文字はすべて textContent で入れる）
+// 表の1行を作る
 function addRow(tbody, cells) {
   const tr = document.createElement('tr');
   cells.forEach(function (c) {
@@ -133,6 +163,15 @@ function addRow(tbody, cells) {
     tr.appendChild(td);
   });
   tbody.appendChild(tr);
+}
+
+// 状態の札
+function stateTag(state) {
+  let cls = 'tag';
+  if (state === '取消') cls += ' cancel';
+  if (state === '成立') cls += ' done';
+  if (state === '日程変更の相談中') cls += ' consult';
+  return el('span', cls, state);
 }
 
 // GASを呼ぶ（Content-Typeをtext/plainにする定石）
@@ -154,13 +193,77 @@ async function callGas(payload) {
   }
 }
 
-// 残日数と申請の一覧を取り直して表示する
+// 確認待ちの一覧を描く
+function renderPending(list) {
+  const box = $('pending');
+  box.textContent = '';
+  $('pendingCount').textContent = list.length;
+  $('pendingCard').className = list.length > 0 ? 'card todo' : 'card todo hidden';
+
+  list.forEach(function (p) {
+    const item = el('div', 'item');
+    item.appendChild(el('div', 'name', p.date + '（' + p.days + '日）'));
+    item.appendChild(el('div', null, '申請者: ' + p.applicantName + '（' + p.company + '）'));
+    item.appendChild(el('div', null, '理由: ' + (p.reason ? p.reason : '（記入なし）')));
+    item.appendChild(el('div', 'muted', '申請番号 ' + p.requestId + ' ／ 申請日時 ' + p.appliedAt));
+
+    const comment = document.createElement('textarea');
+    comment.maxLength = 200;
+    comment.placeholder = 'コメント（日程変更の相談では必ず書きます）';
+    item.appendChild(comment);
+
+    const okBtn = el('button', null, '確認（受理）');
+    okBtn.type = 'button';
+    const consultBtn = el('button', 'sub', '日程変更の相談');
+    consultBtn.type = 'button';
+    item.appendChild(okBtn);
+    item.appendChild(consultBtn);
+
+    okBtn.addEventListener('click', function () { sendConfirm(p.requestId, 'confirm', comment, [okBtn, consultBtn]); });
+    consultBtn.addEventListener('click', function () { sendConfirm(p.requestId, 'consult', comment, [okBtn, consultBtn]); });
+
+    box.appendChild(item);
+  });
+}
+
+// 確認者の操作を送る
+async function sendConfirm(requestId, decision, commentBox, buttons) {
+  if (decision === 'consult' && !commentBox.value.trim()) {
+    showResult('confirmResult', false, '日程変更の相談には、コメント（相談の内容）を書いてください');
+    return;
+  }
+  buttons.forEach(function (b) { b.disabled = true; }); // 二重に送らない
+  showResult('confirmResult', true, '送信中…');
+  try {
+    const data = await callGas({
+      action: 'confirmRequest',
+      requestId: requestId,
+      decision: decision,
+      comment: commentBox.value
+    });
+    if (data.ok) {
+      let text = '記録しました。申請 ' + data.requestId + ' の状態: ' + data.state;
+      if (data.advanced) text += ' ／ 次の確認者へ: ' + data.notifyNote;
+      showResult('confirmResult', true, text);
+      await loadStatus();
+    } else {
+      showResult('confirmResult', false, '記録できませんでした: ' + data.error);
+      buttons.forEach(function (b) { b.disabled = false; });
+    }
+  } catch (err) {
+    showResult('confirmResult', false, 'エラー: ' + (err && err.message ? err.message : err));
+    buttons.forEach(function (b) { b.disabled = false; });
+  }
+}
+
+// 残日数・申請の一覧・確認待ちを取り直して表示する
 async function loadStatus() {
   const data = await callGas({ action: 'getMyStatus' });
   if (!data.ok) throw new Error(data.error);
 
+  $('whoSheet').textContent = '表の上の名前: ' + data.name + '（' + data.company + '）';
   $('total').textContent = data.total;
-  $('asof').textContent = data.asOf + ' 時点 ／ 表の上の名前: ' + data.name + '（' + data.company + '）';
+  $('asof').textContent = data.asOf + ' 時点';
 
   const lots = $('lots');
   lots.textContent = '';
@@ -182,18 +285,20 @@ async function loadStatus() {
   const reqs = $('requests');
   reqs.textContent = '';
   data.requests.forEach(function (r) {
-    const tag = document.createElement('span');
-    tag.className = 'tag' + (r.state === '取消' ? ' cancel' : '');
-    tag.textContent = r.state;
-    addRow(reqs, [r.date, { text: r.days, num: true }, { node: tag }, r.requestId]);
+    addRow(reqs, [r.date, { text: r.days, num: true }, { node: stateTag(r.state) }, r.requestId]);
   });
   $('noreq').textContent = data.requests.length === 0 ? '申請はまだありません' : '';
 
-  log('残日数と申請の一覧を表示しました');
+  renderPending(data.pending || []);
+  log('表示を更新しました（確認待ち ' + (data.pending || []).length + '件）');
 }
 
 async function main() {
   $('date').min = todayString();
+
+  // 試験用：URLに申請番号が付いて届いたかを記録する
+  const reqParam = new URLSearchParams(location.search).get('req');
+  log('URLの申請番号: ' + (reqParam ? reqParam + '（届きました）' : 'なし'));
 
   // 1. WOFFの初期化
   log('WOFFを初期化します');
@@ -210,9 +315,10 @@ async function main() {
   const profile = await woff.getProfile();
   $('who').textContent = profile.displayName + ' さん';
 
-  // 4. 残日数と申請の一覧を出す
+  // 4. 残日数・申請の一覧・確認待ちを出す
   await loadStatus();
   $('send').disabled = false;
+  $('scopeBtn').disabled = false;
 }
 
 // 申請を送る
@@ -220,7 +326,7 @@ async function submitLeave(ev) {
   ev.preventDefault();
   const button = $('send');
   button.disabled = true; // 二重に送らないよう、押したら止める
-  showResult(true, '送信中…');
+  showResult('result', true, '送信中…');
 
   try {
     const data = await callGas({
@@ -231,20 +337,41 @@ async function submitLeave(ev) {
     });
 
     if (data.ok) {
-      showResult(true, '受け付けました。申請番号 ' + data.requestId + ' ／ ' + data.date + ' ／ ' + data.days + '日 ／ 状態: ' + data.state);
+      showResult('result', true, '受け付けました。申請番号 ' + data.requestId + ' ／ ' + data.date + ' ／ ' + data.days + '日 ／ 状態: ' + data.state);
+      log((data.notified ? '通知: ' : '通知なし: ') + (data.notifyNote || ''));
       $('reason').value = '';
-      await loadStatus(); // 数字と一覧を取り直す
+      await loadStatus();
     } else {
-      showResult(false, '受け付けられませんでした: ' + data.error);
+      showResult('result', false, '受け付けられませんでした: ' + data.error);
     }
   } catch (err) {
-    showResult(false, 'エラー: ' + (err && err.message ? err.message : err));
+    showResult('result', false, 'エラー: ' + (err && err.message ? err.message : err));
   } finally {
     button.disabled = false;
   }
 }
 
+// 試験用：通行証の範囲を確かめる
+async function runScopeTest() {
+  const box = $('scopeResult');
+  box.textContent = '確かめています…';
+  try {
+    const d = await callGas({ action: 'scopeTest' });
+    if (!d.ok) throw new Error(d.error);
+    const judge = function (code, shouldWork) {
+      const works = (code >= 200 && code < 300);
+      return code + '（' + (works ? 'できる' : 'できない') + '＝' + (works === shouldWork ? '想定どおり' : '想定と違う') + '）';
+    };
+    box.textContent = '社員名簿の読み取り: ' + judge(d.usersMe, true) +
+      ' ／ Bot送信: ' + judge(d.botSend, false) +
+      ' ／ カレンダー: ' + judge(d.calendar, false);
+  } catch (err) {
+    box.textContent = 'エラー: ' + (err && err.message ? err.message : err);
+  }
+}
+
 $('form').addEventListener('submit', submitLeave);
+$('scopeBtn').addEventListener('click', runScopeTest);
 
 main().catch(function (err) {
   log('エラー: ' + (err && (err.code || '')) + ' ' + (err && err.message ? err.message : err));
